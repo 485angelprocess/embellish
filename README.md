@@ -7,6 +7,14 @@ the goal of this project is to have a modular system for running parallel cpus t
 
 I started by writing a RISC-V soft core in amaranth. It is based on RV32I base instruction set. I have yet to implement branches, but most instructions run.
 
+### Visualizer
+
+Spent some time making a visualizer, which runs off the amaranth simulator. The simulation shows memory access, instruction caching and switch use. The gif shows an infinite loop, which loads one word into memory.
+
+![CPU visualizer](img/riscv_visual.gif)
+
+### Testing
+
 A simple test runs sucessfully:
 
 ```python
@@ -26,7 +34,7 @@ def test_set_reg_to_value(self):
         
         dut, core, prog = core_with_program(prog)
         
-        async def mem_process(ctx):
+        async def mem_process(ctx):git
             assert await receive(ctx, core.bus) == (13, 11, 1)
             assert await receive(ctx, core.bus) == (14, 0, 1)
             assert await receive(ctx, core.bus) == (15, 0, 1)
