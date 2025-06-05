@@ -1,0 +1,421 @@
+from stack_core import StackCore
+import tkinter as tk
+
+FONT_HEADING = "tkDefaultFont 12"
+FONT_NORMAL =  "tkDefaultFont 10"
+FONT_SMALL =   "tkDefaultFont 8"
+
+class WidgetBase(object):
+    def draw(self):
+        pass
+        
+    def update(self, ctx):
+        pass
+        
+    def box(self):
+        return self.param
+        
+class WidgetParam(object):
+    def __init__(self, x, y, w, h, margin = 20, padding = 10):
+        self.x = x
+        self.y = y
+        self.w = w
+        self.h = h
+        
+        self.padding = padding
+        self.margin = margin
+        
+    def top_left(self):
+        return (self.x + self.margin, self.y + self.margin)
+        
+    def bottom_right(self):
+        return (self.x + self.w + self.margin, self.y + self.h + self.margin)
+        
+    def top_left_padded(self, x_offset = 0, y_offset = 0):
+        return (self.x + self.padding + self.margin + x_offset, 
+                self.y + self.padding + self.margin + y_offset)
+
+    def inner_size(self):
+        return (
+            self.w - (2*(self.padding)),
+            self.h - (2*(self.padding))
+        )
+        
+    def offset(self, offset_x, offset_y, margin, padding):
+        
+        return WidgetParam(
+            x = self.top_left_padded()[0] + offset_x,
+            y = self.top_left_padded()[1] + offset_y,
+            w = self.w - self.margin - self.padding,
+            h = self.h - self.margin - self.padding,
+            margin = margin,
+            padding = padding
+        )
+        
+    def spawn_right(self, w, h, y_offset = 10):
+        x = self.x + self.w + (2*self.margin)
+        y = self.y + y_offset
+        return WidgetParam(
+            x = x,
+            y = y,
+            w = w,
+            h = h,
+            margin = self.margin,
+            padding = self.padding
+        )
+
+class StackCoreWidget(WidgetBase):
+    def __init__(self, core, box = WidgetParam(0, 0, 400, 400)):
+        self.core = core
+        
+        self.param = box
+        
+        self.state = None
+        
+    def from_bus_send(self, bus_name = "send", y_offset = 10):
+        return BusWidget(getattr(self.core, bus_name), 
+                            self.param.spawn_right(170, 100, y_offset = y_offset),
+                            name = bus_name)
+        
+    def update(self, ctx):
+        if not hasattr(self.core.debug):
+            print("core not initialized")
+            return
+        self.state = ctx.get(self.core.debug.fsm)
+        
+    def draw(self, canvas):
+        canvas.create_rectangle(self.param.top_left(), 
+                                self.param.bottom_right(),
+                                outline = 'white')
+        
+        canvas.create_text(
+            self.param.top_left_padded(),
+            text = "Stack Core",
+            fill = "white",
+            font = FONT_HEADING,
+            anchor = tk.NW
+        )
+        
+        inner = self.param.offset(0, 15, 0, 1)
+        
+        canvas.create_text(
+            inner.top_left_padded(),
+            text = "State: {}".format(self.state),
+            fill = "white",
+            font = FONT_NORMAL,
+            anchor = tk.NW
+        )
+        
+class BusWidget(WidgetBase):
+    def __init__(self, bus, box, name = "bus"):
+        self.bus = bus
+        self.param = box
+        self.name = name
+        
+        self.cyc = False
+        self.stb = False
+        self.ack = False
+        
+        self.addr = None
+        self.data = None
+        
+        self.color = [0xFF, 0xFF, 0xFF]
+        
+    def update(self, ctx):
+        self.cyc = ctx.get(self.bus.cyc)
+        self.stb = ctx.get(self.bus.stb)
+        self.ack = ctx.get(self.bus.ack)
+        
+        self.data = ctx.get(self.bus.r_data)
+        self.addr = ctx.get(self.bus.addr)
+        
+    def fade(self):
+        for i in range(3):
+            if self.color[i] < 255:
+                self.color[i] += 2
+            else:
+                self.color[i] = 255
+        
+    def draw(self, canvas):
+        if self.ack and self.cyc and self.stb:
+            self.color = [50,  255, 50]
+        #elif self.cyc and self.stb:
+        #    self.color = [125, 200, 0]
+        #elif self.cyc:
+        #    self.color = [125, 125, 0]
+            
+        color = "#{:02X}{:02X}{:02X}".format(*[int(c) & 0xFF for c in self.color])
+            
+        canvas.create_rectangle(self.param.top_left(), 
+                                self.param.bottom_right(),
+                                outline = color)
+                                
+        canvas.create_text(
+            self.param.top_left_padded(),
+            text = self.name,
+            fill = color,
+            font = FONT_NORMAL,
+            anchor = tk.NW
+        )
+        
+        if self.addr is not None:
+            canvas.create_text(
+                self.param.top_left_padded(y_offset = 12),
+                text = "addr: 0x{:02X}".format(self.addr),
+                fill = color,
+                font = FONT_NORMAL,
+                anchor = tk.NW
+            )
+        
+        if self.data is not None:
+            canvas.create_text(
+                self.param.top_left_padded(y_offset = 24),
+                text = "data: 0x{:02X}".format(self.data),
+                fill = color,
+                font = FONT_NORMAL,
+                anchor = tk.NW
+            )
+        
+        self.fade()
+
+class InstructionCacheWidget(object):
+    def __init__(self, cache, param):
+        self.cache = cache
+        self.param = param
+        
+        self.ready = None
+        self.state = 0
+        
+    def update(self, ctx):
+        debug = self.cache.debug
+        if debug is None:
+            return
+        # Hardcoded for now
+        self.ready = [ctx.get(debug.ready[i]) for i in range(4)]
+        self.state = ctx.get(debug.state)
+        
+    def draw(self, canvas):
+        canvas.create_rectangle(self.param.top_left(), 
+                                self.param.bottom_right(),
+                                outline = "white")
+        
+        canvas.create_text(self.param.top_left_padded(),
+                            text = "Cache",
+                            fill = "white",
+                            font = FONT_NORMAL,
+                            anchor = tk.NW)
+        
+        msg = " " 
+        if self.state == 0:
+            msg = "..."
+            
+        canvas.create_text(self.param.top_left_padded(y_offset = 12),
+                            text = msg,
+                            fill = "white",
+                            font = FONT_NORMAL,
+                            anchor = tk.NW)
+        
+        if self.ready is not None:
+            msg = ["_" for _ in range(4)]
+            for i in range(len(self.ready)):
+                if self.ready[i]:
+                    msg[i] = "x"
+            
+            canvas.create_text(self.param.top_left_padded(y_offset = 24),
+                            text = " ".join(msg),
+                            fill = "white",
+                            font = FONT_NORMAL,
+                            anchor = tk.NW)
+
+class MemoryTransaction(object):
+    def __init__(self):
+        self.mode = None
+        self.timer = 0
+        self.address = None
+        
+        self.colors = dict()
+        self.colors["ready"] = (125, 125, 0)
+        self.colors["active"] = (0, 255, 0)
+        self.colors["write"] = (0, 125, 255)
+        
+    def ready(self, address, write = False, intensity = 100):
+        self.mode = "ready"
+        self.timer = intensity
+        self.address = address
+        
+    def start(self, address, write = False, intensity = 100):
+        self.mode = "active"
+        if write:
+            self.mode = "write"
+        self.timer = intensity
+        self.address = address
+        
+    def update(self):
+        if self.timer > 0:
+            self.timer -= 1
+        else:
+            self.timer = 0
+        
+    def color(self):
+        color = (0, 0, 0)
+        if self.mode in self.colors:
+            color = self.colors[self.mode]
+        
+        color = [int(c * self.timer / 100) for c in color]
+        
+        return "#{:02X}{:02X}{:02X}".format(*color)
+        
+    def active(self):
+        return self.timer > 0
+        
+class MemoryWidget(WidgetBase):
+    def __init__(self, mem, param, size = 256):
+        self.mem = mem
+        self.param = param
+        self.size = size
+        
+        self.t = 0
+        self.transactions = [MemoryTransaction() for _ in range(16)]
+        
+    def draw_address(self, canvas, address, x, y, w, h):
+        fill = "white"
+        for trans in self.transactions:
+            if trans.address == address:
+                canvas.create_rectangle((x, y),
+                                (x + w, y + h),
+                                fill = trans.color())
+            
+        canvas.create_text((x, y),
+                            text = "0x{:02X}".format(address),
+                            fill = "white",
+                            font = FONT_SMALL,
+                            anchor = tk.NW)
+                            
+    def update(self, ctx):
+        if ctx.get(self.mem.bus.stb) and ctx.get(self.mem.bus.cyc):
+            if ctx.get(self.mem.bus.ack):
+                self.transactions[self.t].start(ctx.get(self.mem.bus.addr), ctx.get(self.mem.bus.w_en))
+                self.t = (self.t + 1) % len(self.transactions)
+            else:
+                self.transactions[self.t].ready(ctx.get(self.mem.bus.addr), ctx.get(self.mem.bus.w_en))
+            
+        [trans.update() for trans in self.transactions]
+        
+    def draw(self, canvas):
+        canvas.create_rectangle(self.param.top_left(), 
+                                self.param.bottom_right(),
+                                outline = "white")
+        
+        # Create grid of memory locations
+        cols = 8
+        rows = int(self.size / cols)
+        
+        w, h = self.param.inner_size()
+        tx, ty = self.param.top_left_padded()
+        
+        col_width = w/cols
+        row_width = h/rows
+        
+        #assert(row_width > 12)
+        
+        addr = 0
+        for c in range(cols):
+            for r in range(rows):
+                x = tx + (c * col_width)
+                y = ty + (r * row_width) + 2
+                self.draw_address(canvas, addr, x, y, col_width, row_width)
+                addr += 1
+    
+class SwitchWidget(WidgetBase):
+    def __init__(self, switch, param):
+        self.switch = switch
+        self.param = param
+        
+        self.timers = [0, 0]
+        
+    def update(self, ctx):
+        debug = self.switch.debug
+        if ctx.get(debug.cyc[0]) and (ctx.get(debug.select) == 0):
+            self.timers[0] = 100
+        if ctx.get(debug.cyc[1]) and (ctx.get(debug.select) == 1):
+            self.timers[1] = 100
+            
+        for i in range(2):
+            if self.timers[i] > 0:
+                self.timers[i] -= 1
+            else:
+                self.timers[i] = 0
+            
+    def draw_section(self, canvas, t, color, offset, w, h):
+        color = [int(c * t / 100) for c in color]
+        x, y = self.param.top_left_padded()
+        canvas.create_rectangle((x,     y + offset), 
+                                (x + w, y + h + offset),
+                                fill = "#{:02X}{:02X}{:02X}".format(*color))
+            
+    def draw(self, canvas):
+        canvas.create_rectangle(self.param.top_left(), 
+                                self.param.bottom_right(),
+                                outline = "white")
+                                
+        w, h = self.param.inner_size()
+        
+        halfh = int(h / 2)
+        
+        for i in range(2):
+            if self.timers[i] > 0:
+                self.draw_section(canvas, self.timers[i], (0, 255, 0), i*halfh, w, halfh)
+    
+class RiscCoreWidget(WidgetBase):
+    def __init__(self, core, param):
+        self.core = core
+        self.param = param
+        
+        self.pc = 0
+        
+    def update(self, ctx):
+        self.pc = ctx.get(self.core.debug.pc)
+        
+    def draw(self, canvas):
+        canvas.create_rectangle(self.param.top_left(), 
+                                self.param.bottom_right(),
+                                outline = "white")
+                                
+        canvas.create_text(self.param.top_left_padded(),
+                            text = "Risc CPU",
+                            fill = "white",
+                            font = FONT_NORMAL,
+                            anchor = tk.NW)
+                            
+        row_size = 12
+        
+        canvas.create_text(self.param.top_left_padded(y_offset = 1 * row_size),
+                            text = "PC: 0x{:02X}".format(self.pc),
+                            fill = "white",
+                            font = FONT_NORMAL,
+                            anchor = tk.NW)
+    
+class FrameDisplay(object):
+    def __init__(self, bus, box):
+        self.bus = bus
+        self.param = param
+        
+        self.width = 16
+        self.c = 0
+        self.height = 16
+        
+        self.data = dict()
+        
+    def update(self, ctx):
+        ctx.set(self.bus.tready, 1)
+        if ctx.get(self.bus.tvalid):
+            self.data[self.c] = ctx.get(self.bus.tdata)
+            if ctx.get(self.bus.tlast):
+                self.c = 0
+            else:
+                self.c += 1
+    
+    def draw(self, canvas):
+        canvas.create_rectangle(self.param.top_left(), 
+                                self.param.bottom_right(),
+                                outline = "white")
