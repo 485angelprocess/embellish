@@ -53,12 +53,20 @@ risc_instruction_layout = data.UnionLayout({
         "f": 3,
         "rs1": 5,
         "rs2": 5,
-        "imm_upper": 8
+        "imm_upper": 7
     }),
     "j": data.StructLayout({
         "op": 7,
         "rd": 5,
         "offset": signed(20)
+    }),
+    "b": data.StructLayout({
+        "op": 7,
+        "offset_lower": 5,
+        "f": 3,
+        "rs1": 5,
+        "rs2": 5,
+        "offset_upper": 7
     })
 })
     
@@ -110,6 +118,29 @@ class RiscCore(wiring.Component): # RISCV 32I implementation (32E has 16 regs)
             (instruction.j.offset[19]  << 20)   # offset[20]
         )
         
+        branch_offset = Signal(signed(13))
+        
+        # branch offset mapping
+        # offset_upper[12|10:5], offset_lower[4:1|11]
+        m.d.comb += branch_offset.eq(
+            (instruction.b.offset_lower[0] << 11) +
+            (instruction.b.offset_lower[1:5] << 1) +
+            (instruction.b.offset_upper[0:6] << 5) +
+            (instruction.b.offset_upper[6] << 12)
+        )
+        
+        branch_next = Signal(32)
+        
+        m.d.comb += branch_next.eq(
+            program_counter +
+            branch_offset - 4
+        )
+        
+        branch_en = Signal()
+        
+        with m.If(branch_en):
+            m.d.sync += program_counter.eq(branch_next)
+        
         # This is for debugging information
         opcode = Signal(Instruction)
         m.d.comb += opcode.eq(instruction.op)
@@ -158,8 +189,7 @@ class RiscCore(wiring.Component): # RISCV 32I implementation (32E has 16 regs)
                             # take a clock cycle to do math
                             m.next = "ArithImm"
                         with m.Case(Instruction.ARITH):
-                            pass
-                            #m.next = "Arith"
+                            m.next = "Arith"
                         with m.Case(Instruction.MEMORYSTORE):
                             m.next = "MemoryStore"
                         with m.Case(Instruction.MEMORYLOAD):
@@ -169,7 +199,39 @@ class RiscCore(wiring.Component): # RISCV 32I implementation (32E has 16 regs)
                         with m.Default():
                             m.d.sync += Print("Op code not implemented", instruction.op)
             with m.State("Branch"):
-                # TODO
+                with m.Switch(instruction.b.f):
+                    with m.Case(0b000):
+                        # Branch if Equal
+                        m.d.comb += branch_en.eq(
+                            reg[instruction.b.rs1] == reg[instruction.b.rs2]
+                        )
+                    with m.Case(0b001):
+                        # Branch if not equal
+                        m.d.comb += branch_en.eq(
+                            reg[instruction.b.rs1] != reg[instruction.b.rs2]
+                        )
+                    with m.Case(0b100):
+                        # Branch less than
+                        m.d.comb += branch_en.eq(
+                            reg[instruction.b.rs1] < reg[instruction.b.rs2]
+                        )
+                    with m.Case(0b101):
+                        # Branch greater than or equal
+                        m.d.comb += branch_en.eq(
+                            reg[instruction.b.rs1] >= reg[instruction.b.rs2]
+                        )
+                    with m.Case(0b110):
+                        # Branch less than unsigned
+                        m.d.comb += branch_en.eq(
+                            reg[instruction.b.rs1].as_unsigned() <
+                            reg[instruction.b.rs2].as_unsigned()
+                        )
+                    with m.Case(0b111):
+                        # Branch less than signed
+                        m.d.comb += branch_en.eq(
+                            reg[instruction.b.rs1].as_unsigned() >=
+                            reg[instruction.b.rs2].as_unsigned()
+                        )
                 m.next = "Run"
             with m.State("MemoryLoad"):
                 # Load value from memory
@@ -259,10 +321,13 @@ class RiscCore(wiring.Component): # RISCV 32I implementation (32E has 16 regs)
                             # TODO not quite right,
                             # if rs2 is above a value, it's 0,
                             # otherwise actually shift
-                            m.d.sync += reg[instruction.r.rd].eq(
-                                reg[instruction.r.rs1] <<
-                                reg[instruction.r.rs2].as_unsigned()[0:5]
-                            )
+                            with m.If(reg[instruction.r.rs2] > 5):
+                                m.d.sync += reg[instruction.r.rd].eq(0)
+                            with m.Else():
+                                m.d.sync += reg[instruction.r.rd].eq(
+                                    reg[instruction.r.rs1] <<
+                                    reg[instruction.r.rs2].as_unsigned()[0:3]
+                                )
                         with m.Else():
                             m.d.sync += Assert(0, "Function not implemented")
                     with m.Case(0b010):

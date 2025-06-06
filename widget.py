@@ -5,6 +5,45 @@ FONT_HEADING = "tkDefaultFont 12"
 FONT_NORMAL =  "tkDefaultFont 10"
 FONT_SMALL =   "tkDefaultFont 8"
 
+def clip(v, min = 0, max = 255):
+    if v > max:
+        return max
+    if v < min:
+        return min
+    return v
+
+class Color(object):
+    def __init__(self, r, g, b):
+        self.c = [r, g, b]
+        
+    def fade_white(self, step = 1):
+        for i in range(len(self.c)):
+            if self.c[i] < 255:
+                self.c[i] = clip(self.c[i] + step)
+                
+    def fade_black(self, step = 1):
+        for i in range(len(self.c)):
+            if self.c[i] > 0:
+                self.c[i] -= step
+            if self.c[i] < 0:
+                self.c[i] = 0
+                
+    def set_r(self, r, max = 255):
+        self.c[0] = clip(self.c[0] + r, max = max)
+        
+    def set_g(self, g, max = 255):
+        self.c[1] = clip(self.c[1] + g, max = max)
+        
+    def set_b(self, b, max = 255):
+        self.c[2] = clip(self.c[2] + b, max = max)
+        
+    def is_black(self):
+        return all([c == 0 for c in self.c])
+        
+    def as_hex(self, scale = 100):
+        color = [int(c * scale / 100) for c in self.c]
+        return "#{:02X}{:02X}{:02X}".format(*color)
+
 class WidgetBase(object):
     def draw(self):
         pass
@@ -119,7 +158,7 @@ class BusWidget(WidgetBase):
         self.addr = None
         self.data = None
         
-        self.color = [0xFF, 0xFF, 0xFF]
+        self.color = Color(255, 255, 255)
         
     def update(self, ctx):
         self.cyc = ctx.get(self.bus.cyc)
@@ -129,22 +168,17 @@ class BusWidget(WidgetBase):
         self.data = ctx.get(self.bus.r_data)
         self.addr = ctx.get(self.bus.addr)
         
-    def fade(self):
-        for i in range(3):
-            if self.color[i] < 255:
-                self.color[i] += 2
+        if self.ack and self.cyc and self.stb:
+            if ctx.get(self.bus.w_en):
+                print("bus write")
+                self.color.set_r(-200)
+                self.color.set_g(-200)
             else:
-                self.color[i] = 255
+                self.color.set_r(-200)
+                self.color.set_b(-200)
         
     def draw(self, canvas):
-        if self.ack and self.cyc and self.stb:
-            self.color = [50,  255, 50]
-        #elif self.cyc and self.stb:
-        #    self.color = [125, 200, 0]
-        #elif self.cyc:
-        #    self.color = [125, 125, 0]
-            
-        color = "#{:02X}{:02X}{:02X}".format(*[int(c) & 0xFF for c in self.color])
+        color = self.color.as_hex()
             
         canvas.create_rectangle(self.param.top_left(), 
                                 self.param.bottom_right(),
@@ -176,7 +210,7 @@ class BusWidget(WidgetBase):
                 anchor = tk.NW
             )
         
-        self.fade()
+        self.color.fade_white(20)
 
 class InstructionCacheWidget(object):
     def __init__(self, cache, param):
@@ -285,7 +319,7 @@ class MemoryWidget(WidgetBase):
                                 (x + w, y + h),
                                 fill = trans.color())
             
-        canvas.create_text((x, y),
+        canvas.create_text((x+1, y+1),
                             text = "0x{:02X}".format(address),
                             fill = "white",
                             font = FONT_SMALL,
@@ -326,32 +360,30 @@ class MemoryWidget(WidgetBase):
                 self.draw_address(canvas, addr, x, y, col_width, row_width)
                 addr += 1
     
+
+    
 class SwitchWidget(WidgetBase):
     def __init__(self, switch, param):
         self.switch = switch
         self.param = param
         
-        self.timers = [0, 0]
+        self.colors = [Color(0, 0, 0), Color(0, 0, 0)]
         
     def update(self, ctx):
         debug = self.switch.debug
-        if ctx.get(debug.cyc[0]) and (ctx.get(debug.select) == 0):
-            self.timers[0] = 100
-        if ctx.get(debug.cyc[1]) and (ctx.get(debug.select) == 1):
-            self.timers[1] = 100
-            
         for i in range(2):
-            if self.timers[i] > 0:
-                self.timers[i] -= 1
-            else:
-                self.timers[i] = 0
+            if ctx.get(debug.cyc[i]) and (ctx.get(debug.select) == i):
+                if ctx.get(debug.w_en[i]):
+                    self.colors[i].set_b(255)
+                else:
+                    self.colors[i].set_g(255)
+                
             
-    def draw_section(self, canvas, t, color, offset, w, h):
-        color = [int(c * t / 100) for c in color]
+    def draw_section(self, canvas, color, offset, w, h):
         x, y = self.param.top_left_padded()
         canvas.create_rectangle((x,     y + offset), 
                                 (x + w, y + h + offset),
-                                fill = "#{:02X}{:02X}{:02X}".format(*color))
+                                fill = color.as_hex())
             
     def draw(self, canvas):
         canvas.create_rectangle(self.param.top_left(), 
@@ -363,8 +395,34 @@ class SwitchWidget(WidgetBase):
         halfh = int(h / 2)
         
         for i in range(2):
-            if self.timers[i] > 0:
-                self.draw_section(canvas, self.timers[i], (0, 255, 0), i*halfh, w, halfh)
+            if not self.colors[i].is_black():
+                self.draw_section(canvas, self.colors[i], i*halfh, w, halfh)
+            self.colors[i].fade_black(10)
+    
+class RiscRegister(object):
+    def __init__(self, value = 0):
+        self.value = value
+        
+        self.color = Color(0, 0, 0)
+        
+    def update(self, new_value):
+        if new_value != self.value:
+            self.value = new_value
+            self.color.set_b(40, max = 200)
+            self.color.set_g(40, max = 200)
+            
+    def draw(self, canvas, x, y, w, h):
+        canvas.create_rectangle((x, y), 
+                                (x + w, y + h),
+                                fill = self.color.as_hex())
+        
+        canvas.create_text((x + 1, y + 1),
+                            text = "0x{:04X}".format(self.value),
+                            fill = "white",
+                            font = FONT_SMALL,
+                            anchor = tk.NW)
+                            
+        self.color.fade_black()
     
 class RiscCoreWidget(WidgetBase):
     def __init__(self, core, param):
@@ -373,8 +431,13 @@ class RiscCoreWidget(WidgetBase):
         
         self.pc = 0
         
+        self.reg = [RiscRegister() for _ in range(32)]
+        
     def update(self, ctx):
         self.pc = ctx.get(self.core.debug.pc)
+        
+        for i in range(32):
+            self.reg[i].update(ctx.get(self.core.debug.reg[i]))
         
     def draw(self, canvas):
         canvas.create_rectangle(self.param.top_left(), 
@@ -387,13 +450,24 @@ class RiscCoreWidget(WidgetBase):
                             font = FONT_NORMAL,
                             anchor = tk.NW)
                             
-        row_size = 12
+        row_size = 18
+        col_size = 50
         
         canvas.create_text(self.param.top_left_padded(y_offset = 1 * row_size),
                             text = "PC: 0x{:02X}".format(self.pc),
                             fill = "white",
                             font = FONT_NORMAL,
                             anchor = tk.NW)
+        
+        tx, ty = self.param.top_left_padded(y_offset = 1 * row_size)
+        
+        i = 0
+        for c in range(2):
+            for r in range(16):
+                x = tx + (col_size * c)
+                y = ty + (row_size * (r+2))
+                self.reg[i].draw(canvas, x, y, col_size, row_size)
+                i += 1
     
 class FrameDisplay(object):
     def __init__(self, bus, box):

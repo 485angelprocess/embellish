@@ -10,9 +10,73 @@ class SwitchPortDef(object):
         self.data = data
 
 class BusDebug(object):
-    def __init__(self):
-        self.cyc = [None for _ in range(2)]
+    def __init__(self, size = 2):
+        self.cyc = [None for _ in range(size)]
+        self.w_en = [None for _ in range(size)]
         self.select = None
+        
+class RangeToDest(wiring.Component):
+    def __init__(self, major = (16,32), minor = (0,16), dest_shape = 1):
+        self.major = major
+        self.minor = minor
+        
+        super().__init__({
+            "consume": In(Bus(32, 32)),
+            "produce": Out(Bus(32, 32, dest_shape = dest_shape))
+        })
+        
+    def elaborate(self, platform):
+        m = Module()
+        
+        m.d.comb += [
+            # Split address and destination at points
+            self.produce.addr.eq(self.consume.addr[self.minor[0]:self.minor[1]]),
+            self.produce.dest.eq(self.consume.addr[self.major[0]:self.major[1]]),
+            
+            # Transaction
+            self.produce.stb.eq(self.consume.stb),
+            self.produce.cyc.eq(self.consume.cyc),
+            self.consume.ack.eq(self.produce.ack),
+            
+            self.produce.w_en.eq(self.consume.w_en),
+            
+            # Data
+            self.produce.w_data.eq(self.consume.w_data),
+            self.consume.r_data.eq(self.produce.r_data)
+        ]
+        
+        return m
+
+class DestToAddress(wiring.Component):
+    def __init__(self, shift = 16, dest_shape = 1):
+        self.shift = shift
+        
+        super().__init__({
+            "consume": In(Bus(32, 32, dest_shape = dest_shape)),
+            "produce": Out(Bus(32, 32))
+        })
+        
+    def elaborate(self, platform):
+        m = Module()
+        
+        m.d.comb += [
+            # Split address and destination at points
+            self.produce.addr.eq(self.consume.addr + (self.consume.dest << self.shift)),
+            self.produce.dest.eq(0),
+            
+            # Transaction
+            self.produce.stb.eq(self.consume.stb),
+            self.produce.cyc.eq(self.consume.cyc),
+            self.consume.ack.eq(self.produce.ack),
+            
+            self.produce.w_en.eq(self.consume.w_en),
+            
+            # Data
+            self.produce.w_data.eq(self.consume.w_data),
+            self.consume.r_data.eq(self.produce.r_data)
+        ]
+        
+        return m
 
 class BusSwitch(wiring.Component):
     def __init__(self, ports, dest_shape, addr = 16, data = 32):
@@ -37,6 +101,11 @@ class BusSwitch(wiring.Component):
         
         self.debug.cyc[0] = self.c_00.cyc
         self.debug.cyc[1] = self.c_01.cyc
+        
+        self.debug.w_en = [
+            self.c_00.w_en,
+            self.c_01.w_en
+        ]
         
         self.debug.select = select
         
