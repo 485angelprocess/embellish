@@ -1,5 +1,5 @@
-from stack_core import StackCore
 import tkinter as tk
+from PIL import Image, ImageTk
 
 FONT_HEADING = "tkDefaultFont 12"
 FONT_NORMAL =  "tkDefaultFont 10"
@@ -55,6 +55,9 @@ class WidgetBase(object):
         return self.param
         
 class WidgetParam(object):
+    """
+    Define a box for a visualizer element
+    """
     def __init__(self, x, y, w, h, margin = 20, padding = 10):
         self.x = x
         self.y = y
@@ -91,7 +94,7 @@ class WidgetParam(object):
             padding = padding
         )
         
-    def spawn_right(self, w, h, y_offset = 10):
+    def spawn_right(self, w, h, y_offset = 0):
         x = self.x + self.w + (2*self.margin)
         y = self.y + y_offset
         return WidgetParam(
@@ -102,50 +105,11 @@ class WidgetParam(object):
             margin = self.margin,
             padding = self.padding
         )
-
-class StackCoreWidget(WidgetBase):
-    def __init__(self, core, box = WidgetParam(0, 0, 400, 400)):
-        self.core = core
-        
-        self.param = box
-        
-        self.state = None
-        
-    def from_bus_send(self, bus_name = "send", y_offset = 10):
-        return BusWidget(getattr(self.core, bus_name), 
-                            self.param.spawn_right(170, 100, y_offset = y_offset),
-                            name = bus_name)
-        
-    def update(self, ctx):
-        if not hasattr(self.core.debug):
-            print("core not initialized")
-            return
-        self.state = ctx.get(self.core.debug.fsm)
-        
-    def draw(self, canvas):
-        canvas.create_rectangle(self.param.top_left(), 
-                                self.param.bottom_right(),
-                                outline = 'white')
-        
-        canvas.create_text(
-            self.param.top_left_padded(),
-            text = "Stack Core",
-            fill = "white",
-            font = FONT_HEADING,
-            anchor = tk.NW
-        )
-        
-        inner = self.param.offset(0, 15, 0, 1)
-        
-        canvas.create_text(
-            inner.top_left_padded(),
-            text = "State: {}".format(self.state),
-            fill = "white",
-            font = FONT_NORMAL,
-            anchor = tk.NW
-        )
         
 class BusWidget(WidgetBase):
+    """
+    Displays wishbone bus transactions
+    """
     def __init__(self, bus, box, name = "bus"):
         self.bus = bus
         self.param = box
@@ -170,7 +134,6 @@ class BusWidget(WidgetBase):
         
         if self.ack and self.cyc and self.stb:
             if ctx.get(self.bus.w_en):
-                print("bus write")
                 self.color.set_r(-200)
                 self.color.set_g(-200)
             else:
@@ -213,6 +176,9 @@ class BusWidget(WidgetBase):
         self.color.fade_white(20)
 
 class InstructionCacheWidget(object):
+    """
+    Displays instruction cache state
+    """
     def __init__(self, cache, param):
         self.cache = cache
         self.param = param
@@ -262,6 +228,10 @@ class InstructionCacheWidget(object):
                             anchor = tk.NW)
 
 class MemoryTransaction(object):
+    """
+    Displays memory transactions,
+    highlights reads and writes
+    """
     def __init__(self):
         self.mode = None
         self.timer = 0
@@ -319,11 +289,12 @@ class MemoryWidget(WidgetBase):
                                 (x + w, y + h),
                                 fill = trans.color())
             
-        canvas.create_text((x+1, y+1),
-                            text = "0x{:02X}".format(address),
-                            fill = "white",
-                            font = FONT_SMALL,
-                            anchor = tk.NW)
+        if h > 10:
+            canvas.create_text((x+1, y+1),
+                                text = "0x{:02X}".format(address),
+                                fill = "white",
+                                font = FONT_SMALL,
+                                anchor = tk.NW)
                             
     def update(self, ctx):
         if ctx.get(self.mem.bus.stb) and ctx.get(self.mem.bus.cyc):
@@ -359,24 +330,28 @@ class MemoryWidget(WidgetBase):
                 y = ty + (r * row_width) + 2
                 self.draw_address(canvas, addr, x, y, col_width, row_width)
                 addr += 1
-    
 
-    
 class SwitchWidget(WidgetBase):
     def __init__(self, switch, param):
         self.switch = switch
         self.param = param
         
-        self.colors = [Color(0, 0, 0), Color(0, 0, 0)]
+        self.n = self.switch.num_inputs
+        
+        self.colors = [Color(0, 0, 0) for _ in range(self.n)]
         
     def update(self, ctx):
         debug = self.switch.debug
-        for i in range(2):
+        for i in range(self.n):
             if ctx.get(debug.cyc[i]) and (ctx.get(debug.select) == i):
                 if ctx.get(debug.w_en[i]):
                     self.colors[i].set_b(255)
                 else:
                     self.colors[i].set_g(255)
+                if ctx.get(debug.ack[i]):
+                    self.colors[i].set_r(100)
+                    self.colors[i].set_g(50)
+                    self.colors[i].set_b(50)
                 
             
     def draw_section(self, canvas, color, offset, w, h):
@@ -392,9 +367,9 @@ class SwitchWidget(WidgetBase):
                                 
         w, h = self.param.inner_size()
         
-        halfh = int(h / 2)
+        halfh = int(h / self.n)
         
-        for i in range(2):
+        for i in range(self.n):
             if not self.colors[i].is_black():
                 self.draw_section(canvas, self.colors[i], i*halfh, w, halfh)
             self.colors[i].fade_black(10)
@@ -468,28 +443,51 @@ class RiscCoreWidget(WidgetBase):
                 y = ty + (row_size * (r+2))
                 self.reg[i].draw(canvas, x, y, col_size, row_size)
                 i += 1
+                
+import random
+import numpy as np
     
-class FrameDisplay(object):
-    def __init__(self, bus, box):
-        self.bus = bus
+class FrameDisplayWidget(WidgetBase):
+    def __init__(self, stream, param):
+        self.stream = stream
         self.param = param
         
-        self.width = 16
-        self.c = 0
-        self.height = 16
+        self.x = 0
+        self.y = 0
         
-        self.data = dict()
+        self.contents = np.full(shape=(16, 16, 3), fill_value=[135, 206, 250], dtype=np.uint8)
+        
+        self.update_img()
+        
+    def update_img(self):
+        m_img = Image.fromarray(self.contents, 'RGB')
+        m_img = m_img.resize(self.param.inner_size())
+        img = ImageTk.PhotoImage(image = m_img)
+        self.img = img
         
     def update(self, ctx):
-        ctx.set(self.bus.tready, 1)
-        if ctx.get(self.bus.tvalid):
-            self.data[self.c] = ctx.get(self.bus.tdata)
-            if ctx.get(self.bus.tlast):
-                self.c = 0
+        ctx.set(self.stream.tready, 1)
+        if ctx.get(self.stream.tvalid):
+            
+            # Insert new pixels
+            self.contents[self.y][self.x] = ctx.get(self.stream.tdata)
+            
+            # Keep track of scanner
+            if ctx.get(self.stream.tlast):
+                self.x = 0
+                self.y = 0
+            elif ctx.get(self.stream.tuser):
+                self.x = 0
+                self.y += 1
             else:
-                self.c += 1
+                self.x += 1
+                
+            self.update_img()
     
     def draw(self, canvas):
         canvas.create_rectangle(self.param.top_left(), 
                                 self.param.bottom_right(),
                                 outline = "white")
+                                
+        
+        canvas.create_image(self.param.top_left_padded(), anchor = "nw", image = self.img)

@@ -9,20 +9,14 @@ class SwitchPortDef(object):
         self.addr = addr
         self.data = data
 
-class BusDebug(object):
-    def __init__(self, size = 2):
-        self.cyc = [None for _ in range(size)]
-        self.w_en = [None for _ in range(size)]
-        self.select = None
-        
 class RangeToDest(wiring.Component):
-    def __init__(self, major = (16,32), minor = (0,16), dest_shape = 1):
+    def __init__(self, data_shape = 8, major = (16,32), minor = (0,16), dest_shape = 1):
         self.major = major
         self.minor = minor
         
         super().__init__({
-            "consume": In(Bus(32, 32)),
-            "produce": Out(Bus(32, 32, dest_shape = dest_shape))
+            "consume": In(Bus(32, data_shape)),
+            "produce": Out(Bus(32, data_shape, dest_shape = dest_shape))
         })
         
     def elaborate(self, platform):
@@ -77,77 +71,69 @@ class DestToAddress(wiring.Component):
         ]
         
         return m
+        
+class BusDebug(object):
+    def __init__(self, size = 2):
+        self.cyc = [None for _ in range(size)]
+        self.w_en = [None for _ in range(size)]
+        self.select = None
 
 class BusSwitch(wiring.Component):
-    def __init__(self, ports, dest_shape, addr = 16, data = 32):
+    def __init__(self, ports, dest_shape, addr = 16, data = 32, num_inputs = 2):
         self.n = len(ports)
+        
+        self.num_inputs = num_inputs
         
         p = dict()
         for i in range(len(ports)):
             p["p_{:02X}".format(i)] = Out(Bus(ports[i].addr, ports[i].data))
         
-        super().__init__({
-            "c_00": In(Bus(addr, data, dest_shape)),
-            "c_01": In(Bus(addr, data, dest_shape)),
-        } | p)
+        c = dict()
+        for i in range(num_inputs):
+            c["c_{:02X}".format(i)] = In(Bus(addr, data, dest_shape))
+        
+        super().__init__(c | p)
         
     def elaborate(self, platform):
         m = Module()
         
-        select = Signal()
+        select = Signal(range(self.num_inputs))
+        
+        consume = [getattr(self, "c_{:02X}".format(i)) for i in range(self.num_inputs)]
         
         # For visualizing
         self.debug = BusDebug()
         
-        self.debug.cyc[0] = self.c_00.cyc
-        self.debug.cyc[1] = self.c_01.cyc
+        self.debug.cyc = [c.cyc for c in consume]
+        self.debug.ack = [c.ack for c in consume]
         
-        self.debug.w_en = [
-            self.c_00.w_en,
-            self.c_01.w_en
-        ]
+        self.debug.w_en = [c.w_en for c in consume]
         
         self.debug.select = select
         
-        with m.If(select == 0):
-            with m.If(~self.c_00.cyc):
-                # Check other input
-                m.d.sync += select.eq(1)
-            with m.Switch(self.c_00.dest):
-                # Connect
-                for i in range(self.n):
-                    with m.Case(i):
-                        p = getattr(self, "p_{:02X}".format(i))
-                        c = self.c_00
-                        m.d.comb += [
-                            p.stb.eq(c.stb),
-                            p.cyc.eq(c.cyc),
-                            c.ack.eq(p.ack),
-                            p.addr.eq(c.addr),
-                            p.w_en.eq(c.w_en),
-                            p.w_data.eq(c.w_data),
-                            c.r_data.eq(p.r_data)
-                        ]
-                        
-        with m.If(select == 1):
-            with m.If(~self.c_01.cyc):
-                # Check other input
-                m.d.sync += select.eq(0)
-            with m.Switch(self.c_01.dest):
-                # Connect
-                for i in range(self.n):
-                    with m.Case(i):
-                        p = getattr(self, "p_{:02X}".format(i))
-                        c = self.c_01
-                        m.d.comb += [
-                            p.stb.eq(c.stb),
-                            p.cyc.eq(c.cyc),
-                            c.ack.eq(p.ack),
-                            p.addr.eq(c.addr),
-                            p.w_en.eq(c.w_en),
-                            p.w_data.eq(c.w_data),
-                            c.r_data.eq(p.r_data)
-                        ]
+        for i in range(len(consume)):
+            c = consume[i]
+            with m.If(select == i):
+                with m.If(~c.cyc):
+                    # Check other input
+                    with m.If(select == len(consume) - 1):
+                        m.d.sync += select.eq(0)
+                    with m.Else():
+                        m.d.sync += select.eq(select + 1)
+                with m.Switch(c.dest):
+                    # Connect
+                    for i in range(self.n):
+                        with m.Case(i):
+                            p = getattr(self, "p_{:02X}".format(i))
+                            m.d.comb += [
+                                p.stb.eq(c.stb),
+                                p.cyc.eq(c.cyc),
+                                c.ack.eq(p.ack),
+                                p.addr.eq(c.addr),
+                                p.w_en.eq(c.w_en),
+                                p.w_data.eq(c.w_data),
+                                c.r_data.eq(p.r_data)
+                            ]
         
         return m
         

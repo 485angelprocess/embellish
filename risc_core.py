@@ -83,7 +83,7 @@ class RiscCore(wiring.Component): # RISCV 32I implementation (32E has 16 regs)
         super().__init__({
             "bus": Out(Bus(32, 8)),
             "prog": Out(Bus(32, 32)),
-            "int": In(Bus(32, 32))
+            "int": In(Bus(32, 8))
         })
         
     def elaborate(self, platform):

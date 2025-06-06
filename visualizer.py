@@ -1,11 +1,12 @@
 import tkinter as tk
 
 from widget import *
-from stack_core import StackCore
-from core import WishboneMemory
+from ram import WishboneMemory
 from risc_core import RiscCore
 from cache import InstructionCache
-from switch import BusSwitch, SwitchPortDef
+from switch import BusSwitch, SwitchPortDef, RangeToDest
+from delegate import Delegate
+from framebuffer import FrameBuffer
 from test_risc_core import InstructionBuilder
 
 from amaranth import *
@@ -45,7 +46,7 @@ def sample_program():
 window = tk.Tk()
 window.title("Embellish Visualizer")
 
-canvas = tk.Canvas(window, width = 1200, height = 800, bg = 'black')
+canvas = tk.Canvas(window, width = 1600, height = 800, bg = 'black')
 canvas.pack(anchor = tk.NW, expand = True)
 
 m = Module()
@@ -53,48 +54,68 @@ m = Module()
 #m.submodules.sc = sc = StackCore()
 
 m.submodules.mem = mem = WishboneMemory(8, 256, init = sample_program())
-m.submodules.switch = switch = BusSwitch([SwitchPortDef(32, 8)], 1, 32, 8)
+m.submodules.switch = switch = BusSwitch([SwitchPortDef(32, 8)], 1, 32, 8, num_inputs = 3)
 m.submodules.cache = cache = InstructionCache()
 m.submodules.core = core = RiscCore()
 
-wiring.connect(m, mem.bus, switch.p_00)
+m.submodules.periph_map = periph_map = RangeToDest()
+m.submodules.periph_switch = periph_switch = BusSwitch(
+                        [SwitchPortDef(32, 8), SwitchPortDef(32, 8)],
+                        1,
+                        addr = 32,
+                        data = 8,
+                        num_inputs = 1)
+m.submodules.fb = fb = FrameBuffer(width = 16, height = 16)
+m.submodules.vram = vram = WishboneMemory(8, 1024)
+
+                        
+# Access to program memory
 wiring.connect(m, cache.mem, switch.c_00)
 wiring.connect(m, cache.proc, core.prog)
-wiring.connect(m, core.bus,  switch.c_01)
 
+wiring.connect(m, switch.p_00, mem.bus)
+
+# Map memory transactions to ram and peripherals
+wiring.connect(m, core.bus,  periph_map.consume)
+# Map to secondary switch
+wiring.connect(m, periph_map.produce, periph_switch.c_00)
+# Switch to ram access
+wiring.connect(m, periph_switch.p_00, switch.c_01)
+
+# Framebuffer 
+# Direct access by CPU
+wiring.connect(m, fb.consume, periph_switch.p_01)
+# Controller to memory device
+wiring.connect(m, fb.ram, vram.bus)
+
+#############################
+## Widgets for visualizer ###
+#############################
 widgets = list()
-#sc = StackCoreWidget(sc)
-#send = sc.from_bus_send("send")
 
-mw = MemoryWidget(mem, WidgetParam(100, 100, 300, 550))
+# Memory device
+mw = MemoryWidget(mem, WidgetParam(50, 100, 300, 550))
 membus = BusWidget(mem.bus, mw.param.spawn_right(100, 75, y_offset = 250), name = "mem")
 sw = SwitchWidget(switch, membus.param.spawn_right(50, 550, y_offset = -250))
 
-cachew = InstructionCacheWidget(cache, sw.param.spawn_right(100, 100, y_offset = 100))
+periph_sw = SwitchWidget(periph_switch, WidgetParam(700, 325, 50, 100))
 
+# CPU
+cachew = InstructionCacheWidget(cache, sw.param.spawn_right(100, 100, y_offset = 50))
 cw = RiscCoreWidget(core, cachew.param.spawn_right(200, 400, y_offset = -50))
+
+# Framebuffer
+vramw = MemoryWidget(vram, cw.param.spawn_right(100, 200))
+displayw = FrameDisplayWidget(fb.produce, vramw.param.spawn_right(100, 100))
 
 widgets.append(mw)
 widgets.append(membus)
 widgets.append(sw)
+widgets.append(periph_sw)
 widgets.append(cachew)
 widgets.append(cw)
-
-import random
-
-async def random_read(ctx):
-    # TEMP random reads
-    port = cache.proc
-    while True:
-        address = random.randrange(0, 256)
-        ctx.set(port.addr, address)
-        await ctx.tick().repeat(10)
-        ctx.set(port.stb, 1)
-        ctx.set(port.cyc, 1)
-        await ctx.tick().until(mem.bus.ack)
-        ctx.set(port.stb, 0)
-        ctx.set(port.cyc, 0)
-        await ctx.tick().repeat(10)
+widgets.append(vramw)
+widgets.append(displayw)
     
 async def update(ctx):
     while True:
@@ -107,11 +128,11 @@ sim.add_clock(1e-8)
 #sim.add_process(random_read)
 sim.add_testbench(update)
 
-#with sim.write_vcd("bench/visualize.vcd"):
-while True:
-    canvas.delete("all") # Stupid and inefficient but fuck off
-    for w in widgets:
-        w.draw(canvas)    
-    sim.advance()
-    window.update_idletasks()
-    window.update()
+with sim.write_vcd("bench/visualize.vcd"):
+    while True:
+        canvas.delete("all") # Stupid and inefficient but fuck off
+        for w in widgets:
+            w.draw(canvas)    
+        sim.advance()
+        window.update_idletasks()
+        window.update()

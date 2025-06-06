@@ -5,7 +5,7 @@ from amaranth import *
 
 from bus_sim import *
 from risc_core import RiscCore
-from core import Memory
+from ram import Memory
 
 def map_bit(value, fromstart, fromstop, tostart, tostop):
     # Mapping
