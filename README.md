@@ -5,7 +5,7 @@ the goal of this project is to have a modular system for running parallel cpus t
 
 ## Risc-V softcore
 
-I started by writing a RISC-V soft core in amaranth. It is based on RV32I base instruction set. I have yet to implement branches, but most instructions run.
+I started by writing a RISC-V soft core in amaranth. It is based on RV32I base instruction set.
 
 ### Visualizer
 
