@@ -27,51 +27,54 @@ class FrameBuffer(wiring.Component):
         num_pixels = self.width * self.height
         
         color_counter = Signal(range(3))
-        address_counter = Signal(range(num_pixels))
+        address_counter = Signal(range(num_pixels*3))
         
         col_counter = Signal(range(self.width))
         
         pixel = Signal(24)
         
-        m.d.comb += self.produce.tdata.eq(pixel)
-        m.d.comb += self.produce.tuser.eq(col_counter == self.width - 1)
-        m.d.comb += self.produce.tlast.eq(address_counter == (num_pixels*3) - 1)
+        m.d.sync += self.produce.tdata.eq(pixel)
+        m.d.sync += self.produce.tuser.eq(col_counter == self.width - 1)
+        m.d.sync += self.produce.tlast.eq(address_counter >= (num_pixels*3) - 1)
         
         with m.FSM():
-            with m.State("Startup"):
-                m.next = "Stream"
             with m.State("Stream"):
                 with m.If(self.consume.cyc):
                     m.next = "Access"
                 
                 m.d.comb += self.ram.addr.eq(address_counter)
                 # Stream out data
-                m.d.comb += self.ram.cyc.eq(self.produce.tready)
+                m.d.comb += self.ram.cyc.eq(1)
                 m.d.comb += self.ram.stb.eq(self.produce.tready)
+                m.d.comb += self.ram.w_en.eq(0)
                 
-                m.d.comb += self.produce.tvalid.eq((self.ram.ack) & (color_counter == 2))
+                m.d.sync += self.produce.tvalid.eq((self.ram.ack) & (color_counter == 2))
                 
-                with m.If(self.ram.cyc & self.ram.stb & self.ram.ack):
-                        # Just one more color channel
-                        m.d.sync += address_counter.eq(address_counter + 1)
-                        
-                        with m.If(color_counter == 2):
-                            with m.If(self.produce.tlast):
-                                # End of frame
-                                m.d.sync += address_counter.eq(0)
-                                m.d.sync += col_counter.eq(0)
-                            with m.Elif(self.produce.tuser):
-                                # End of row
-                                m.d.sync += address_counter.eq(address_counter + 1)
-                                m.d.sync += col_counter.eq(0)
-                            with m.Else():
-                                m.d.sync += col_counter.eq(col_counter + 1)
-                            m.d.sync += color_counter.eq(0)
+                with m.If(self.ram.ack):
+                    m.d.sync += pixel.eq((pixel << 8) + self.ram.r_data)
+                    m.d.sync += address_counter.eq(address_counter + 1)
+                    with m.If(color_counter == 2):
+                        m.d.sync += color_counter.eq(0)
+                        with m.If(self.produce.tlast):
+                            m.d.sync += address_counter.eq(0)
+                            m.d.sync += col_counter.eq(0)
+                        with m.Elif(self.produce.tuser):
+                            m.d.sync += col_counter.eq(0)
                         with m.Else():
-                            m.d.sync += color_counter.eq(color_counter + 1)
+                            m.d.sync += col_counter.eq(col_counter + 1)
+                    with m.Else():
+                        m.d.sync += color_counter.eq(color_counter + 1)
+                
             with m.State("Access"):
-                wiring.connect(m, self.consume, self.ram)
-                    
+                m.d.comb += [
+                    self.ram.stb.eq(self.consume.stb),
+                    self.ram.cyc.eq(self.consume.cyc),
+                    self.consume.ack.eq(self.ram.ack),
+                    self.ram.addr.eq(self.consume.addr),
+                    self.ram.w_en.eq(self.consume.w_en),
+                    self.ram.w_data.eq(self.consume.w_data),
+                    self.consume.r_data.eq(self.ram.r_data)
+                ]
                 with m.If(~self.consume.cyc):
                     m.next = "Stream"
         

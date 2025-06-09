@@ -5,7 +5,7 @@ from amaranth import *
 
 from bus_sim import *
 from risc_core import RiscCore
-from ram import Memory
+import ram
 
 def map_bit(value, fromstart, fromstop, tostart, tostop):
     # Mapping
@@ -97,10 +97,10 @@ def core_with_program(program):
     m = Module()
         
     core = m.submodules.core = RiscCore()
-    prog = m.submodules.prog = Memory(32, len(program) << 1, init = program)
-        
+    prog = m.submodules.prog = ram.WishboneMemory(32, len(program) << 1, init = program, granularity = 2)
+     
     wiring.connect(m, core.prog, prog.bus)
-        
+    
     return m, core, prog
         
 class TestRiscCore(unittest.TestCase):

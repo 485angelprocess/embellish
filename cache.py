@@ -49,8 +49,8 @@ class InstructionCache(wiring.Component):
         m.d.comb += self.proc.r_data.eq(cache[read_pointer])
         m.d.comb += self.mem.addr.eq(address + byte_counter)
         
-        write_next = Signal(range(cache_width))
-        m.d.comb += write_next.eq(write_pointer + 1)
+        #write_next = Signal(range(cache_width))
+        #m.d.comb += write_next.eq(write_pointer + 1)
         
         with m.FSM() as fsm:
             with m.State("Reset"):

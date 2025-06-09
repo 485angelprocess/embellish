@@ -8,10 +8,11 @@ class WishboneMemory(wiring.Component):
     """
     Memory device for local core memory
     """
-    def __init__(self, shape, depth, init = []):
+    def __init__(self, shape, depth, init = [], granularity = 0):
         self.shape = shape
         self.depth = depth
         self.init = init
+        self.granularity = granularity
         
         super().__init__({
             "bus": In(Bus(32, shape))
@@ -32,14 +33,19 @@ class WishboneMemory(wiring.Component):
         m.d.comb += read_port.en.eq((~self.bus.w_en) & self.bus.stb & self.bus.cyc)
             
         # Address
-        m.d.comb += write_port.addr.eq(self.bus.addr)
-        m.d.comb += read_port.addr.eq(self.bus.addr)
+        m.d.comb += write_port.addr.eq(self.bus.addr >> self.granularity)
+        m.d.comb += read_port.addr.eq(self.bus.addr >> self.granularity)
         
         # Ack signal
-        with m.If(self.bus.ack):
-            m.d.sync += self.bus.ack.eq(0)
-        with m.Else():
-            m.d.sync += self.bus.ack.eq(write_port.en | read_port.en)
+        write_ok = Signal()
+        
+        m.d.comb += write_ok.eq(write_port.en)
+        
+        read_ok = Signal()
+        
+        m.d.sync += read_ok.eq(read_port.en)
+        
+        m.d.comb += self.bus.ack.eq(write_ok | read_ok)
         
         m.d.comb += self.bus.r_data.eq(read_port.data)
         

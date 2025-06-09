@@ -45,6 +45,9 @@ class Color(object):
         return "#{:02X}{:02X}{:02X}".format(*color)
 
 class WidgetBase(object):
+    def setup(self, canvas):
+        pass
+    
     def draw(self):
         pass
         
@@ -119,8 +122,8 @@ class BusWidget(WidgetBase):
         self.stb = False
         self.ack = False
         
-        self.addr = None
-        self.data = None
+        self.addr = 0
+        self.data = 0
         
         self.color = Color(255, 255, 255)
         
@@ -140,14 +143,14 @@ class BusWidget(WidgetBase):
                 self.color.set_r(-200)
                 self.color.set_b(-200)
         
-    def draw(self, canvas):
+    def setup(self, canvas):
         color = self.color.as_hex()
-            
-        canvas.create_rectangle(self.param.top_left(), 
+        
+        rect = canvas.create_rectangle(self.param.top_left(), 
                                 self.param.bottom_right(),
                                 outline = color)
                                 
-        canvas.create_text(
+        title = canvas.create_text(
             self.param.top_left_padded(),
             text = self.name,
             fill = color,
@@ -155,23 +158,36 @@ class BusWidget(WidgetBase):
             anchor = tk.NW
         )
         
-        if self.addr is not None:
-            canvas.create_text(
-                self.param.top_left_padded(y_offset = 12),
-                text = "addr: 0x{:02X}".format(self.addr),
-                fill = color,
-                font = FONT_NORMAL,
-                anchor = tk.NW
-            )
+        addr = canvas.create_text(
+            self.param.top_left_padded(y_offset = 12),
+            text = "addr: 0x{:02X}".format(self.addr),
+            fill = color,
+            font = FONT_NORMAL,
+            anchor = tk.NW
+        )
         
-        if self.data is not None:
-            canvas.create_text(
-                self.param.top_left_padded(y_offset = 24),
-                text = "data: 0x{:02X}".format(self.data),
-                fill = color,
-                font = FONT_NORMAL,
-                anchor = tk.NW
-            )
+        self.data_label = canvas.create_text(
+            self.param.top_left_padded(y_offset = 24),
+            text = "data: 0x{:02X}".format(self.data),
+            fill = color,
+            font = FONT_NORMAL,
+            anchor = tk.NW
+        )
+        
+        self.rect = rect
+        self.title_label = title
+        self.addr_label = addr
+        
+    def draw(self, canvas):
+        color = self.color.as_hex()
+        canvas.itemconfig(self.rect, outline = color)
+        canvas.itemconfig(self.title_label, fill = color)
+        canvas.itemconfig(self.addr_label, 
+                            fill = color,
+                            text = "addr: 0x{:02X}".format(self.addr))
+        canvas.itemconfig(self.data_label, 
+                            fill = color,
+                            text = "data: 0x{:02X}".format(self.data))
         
         self.color.fade_white(20)
 
@@ -273,46 +289,49 @@ class MemoryTransaction(object):
         return self.timer > 0
         
 class MemoryWidget(WidgetBase):
-    def __init__(self, mem, param, size = 256):
+    def __init__(self, mem, param):
         self.mem = mem
         self.param = param
-        self.size = size
+        self.size = mem.depth
         
         self.t = 0
         self.transactions = [MemoryTransaction() for _ in range(16)]
         
-    def draw_address(self, canvas, address, x, y, w, h):
-        fill = "white"
-        for trans in self.transactions:
-            if trans.address == address:
-                canvas.create_rectangle((x, y),
-                                (x + w, y + h),
-                                fill = trans.color())
+        self.boxes = list()
+        self.labels = list()
+        
+    def update(self, ctx):
+        if ctx.get(self.mem.bus.stb) and ctx.get(self.mem.bus.cyc):
+            addr = ctx.get(self.mem.bus.addr) % self.size
+            if ctx.get(self.mem.bus.ack):
+                self.transactions[self.t].start(addr, ctx.get(self.mem.bus.w_en))
+                self.t = (self.t + 1) % len(self.transactions)
+            else:
+                self.transactions[self.t].ready(addr, ctx.get(self.mem.bus.w_en))
             
-        if h > 10:
-            canvas.create_text((x+1, y+1),
+        [trans.update() for trans in self.transactions]
+        
+    def draw_labels(self, canvas, address, x, y, w, h):
+        b = canvas.create_rectangle((x, y),
+                                (x + w, y + h),
+                                fill = "black")
+        self.boxes.append(b)
+        
+        if h > 10 and w > 10:
+            label = canvas.create_text((x+1, y+1),
                                 text = "0x{:02X}".format(address),
                                 fill = "white",
                                 font = FONT_SMALL,
                                 anchor = tk.NW)
-                            
-    def update(self, ctx):
-        if ctx.get(self.mem.bus.stb) and ctx.get(self.mem.bus.cyc):
-            if ctx.get(self.mem.bus.ack):
-                self.transactions[self.t].start(ctx.get(self.mem.bus.addr), ctx.get(self.mem.bus.w_en))
-                self.t = (self.t + 1) % len(self.transactions)
-            else:
-                self.transactions[self.t].ready(ctx.get(self.mem.bus.addr), ctx.get(self.mem.bus.w_en))
+            self.labels.append(label)
             
-        [trans.update() for trans in self.transactions]
-        
-    def draw(self, canvas):
-        canvas.create_rectangle(self.param.top_left(), 
+    def setup(self, canvas):
+        self.rect = canvas.create_rectangle(self.param.top_left(), 
                                 self.param.bottom_right(),
                                 outline = "white")
         
         # Create grid of memory locations
-        cols = 8
+        cols = int(max(1, self.size / 32))
         rows = int(self.size / cols)
         
         w, h = self.param.inner_size()
@@ -328,9 +347,18 @@ class MemoryWidget(WidgetBase):
             for r in range(rows):
                 x = tx + (c * col_width)
                 y = ty + (r * row_width) + 2
-                self.draw_address(canvas, addr, x, y, col_width, row_width)
+                self.draw_labels(canvas, addr, x, y, col_width, row_width)
                 addr += 1
-
+        
+    def draw(self, canvas):
+        # Create grid of memory locations
+        for b in self.boxes:
+            canvas.itemconfig(b, fill = "black")
+        
+        for trans in self.transactions:
+            if trans.active():
+                canvas.itemconfig(self.boxes[trans.address], fill = trans.color())
+                
 class SwitchWidget(WidgetBase):
     def __init__(self, switch, param):
         self.switch = switch
@@ -461,16 +489,20 @@ class FrameDisplayWidget(WidgetBase):
         
     def update_img(self):
         m_img = Image.fromarray(self.contents, 'RGB')
-        m_img = m_img.resize(self.param.inner_size())
+        m_img = m_img.resize(self.param.inner_size(), resample = Image.Resampling.NEAREST)
         img = ImageTk.PhotoImage(image = m_img)
         self.img = img
+        self.update_flag = True
         
     def update(self, ctx):
         ctx.set(self.stream.tready, 1)
         if ctx.get(self.stream.tvalid):
             
             # Insert new pixels
-            self.contents[self.y][self.x] = ctx.get(self.stream.tdata)
+            pix = ctx.get(self.stream.tdata)
+            self.contents[self.y][self.x][0] = pix & 0xFF
+            self.contents[self.y][self.x][1] = (pix >> 8) & 0xFF
+            self.contents[self.y][self.x][2] = (pix >> 16) & 0xFF
             
             # Keep track of scanner
             if ctx.get(self.stream.tlast):
@@ -481,13 +513,18 @@ class FrameDisplayWidget(WidgetBase):
                 self.y += 1
             else:
                 self.x += 1
-                
+            
             self.update_img()
-    
-    def draw(self, canvas):
+            
+    def setup(self, canvas):
         canvas.create_rectangle(self.param.top_left(), 
                                 self.param.bottom_right(),
                                 outline = "white")
                                 
         
-        canvas.create_image(self.param.top_left_padded(), anchor = "nw", image = self.img)
+        self.img_id = canvas.create_image(self.param.top_left_padded(), anchor = "nw", image = self.img)
+    
+    def draw(self, canvas):
+        if self.update_flag:
+            #canvas.itemconfig(self.img_id, image = self.img)
+            self.update_flag = False
